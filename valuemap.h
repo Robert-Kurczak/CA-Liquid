@@ -22,6 +22,10 @@ class Map{
     public:
         const uint32_t width, height;
 
+        void snowflakeIteration(){
+            
+        }
+
         Map(uint32_t width, uint32_t height): width(width), height(height){
             //---Matrix initialization with zeros---
             for(size_t y = 0; y < height; y++){
