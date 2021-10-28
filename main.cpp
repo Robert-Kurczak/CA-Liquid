@@ -16,9 +16,7 @@ class Cell{
 
 class LiquidSimulator : public olc::PixelGameEngine{
     private:
-        double simulationTime = 0;
-
-        std::vector<std::vector<char>> valueMatrix;
+        std::vector<std::vector<char>> matrix;
 
     public:
         bool OnUserCreate() override{
@@ -30,27 +28,24 @@ class LiquidSimulator : public olc::PixelGameEngine{
                     row.push_back(0);
                 }
 
-                valueMatrix.push_back(row);
-            }
-
-            for(int x = 0; x < ScreenWidth(); x++){
-                valueMatrix[x % 2][x] = 1;
+                matrix.push_back(row);
             }
             //------
+
+            //---For tests---
+            for(int y = 0; y < ScreenHeight() / 2; y++){
+                matrix[y][y % 2] = 1;
+            }
 
             return true;
         }
 
         bool OnUserUpdate(float fElapsedTime) override{
-            //Updating simulation time
-            simulationTime += fElapsedTime;
-
-            //Clearing previous screen
-            FillRect(0, 0, ScreenWidth(), ScreenHeight(), olc::BLACK);
+            //Clear(olc::BLACK);
 
             for(int y = 0; y < ScreenHeight(); y++){
                 for(int x = 0; x < ScreenWidth(); x++){
-                    Draw(x, y, valueMatrix[y][x] == 1 ? olc::BLUE : olc::BLACK);
+                    if(matrix[y][x]) Draw(x, y, olc::WHITE);
                 }
             }
 
