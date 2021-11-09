@@ -2,6 +2,7 @@
 #include "olcPixelGameEngine.h"
 #include "cstdlib"
 #include "iostream"
+#include <math.h>
 
 #define solidBlockID 999
 
@@ -85,7 +86,7 @@ class LiquidSimulator : public olc::PixelGameEngine{
             //------
 
             //matrix[8][4] = 5;
-            matrix[3][5] = 4;
+            matrix[18][15] = 4;
 
             return true;
         }
@@ -93,7 +94,7 @@ class LiquidSimulator : public olc::PixelGameEngine{
         bool OnUserUpdate(float fElapsedTime) override{
             //---Spawn water cell on Enter---
             if(GetKey(olc::Key::ENTER).bPressed){
-                matrix[3][5] = 4;
+                matrix[15][15] = 4;
             }//------
 
             //---Executing simulation every update interval---
@@ -110,29 +111,91 @@ class LiquidSimulator : public olc::PixelGameEngine{
             Clear(olc::BLACK);
 
             //---Simulation step---
+            std::vector<std::vector<float>> newMatrix = matrix;
             for(int y = 0; y < matrixSize.y; y++){
                 for(int x = 0; x < matrixSize.x; x++){
+                    float &currentCell = newMatrix[y][x];
 
-                    float currentCell = matrix[y][x];
-                    float bottomtCell = getNeighbour(olc::vi2d(x, y), olc::vi2d(0, 1));
+                    //---Debug---//
+                    //float xRow[25] = 
+                    //------
 
                     if(currentCell == -1 || currentCell == solidBlockID) continue;
-                    if(bottomtCell == -1 || bottomtCell == solidBlockID) continue;
 
-                    float waterToFlow = waterFlowDown(currentCell, bottomtCell) / flowDivider;
+                    float bottomCell = getNeighbour(olc::vi2d(x, y), olc::vi2d(0, 1));
+                    float leftCell = getNeighbour(olc::vi2d(x, y), olc::vi2d(-1, 0));
+                    float rightCell = getNeighbour(olc::vi2d(x, y), olc::vi2d(1, 0));
 
-                    if(waterToFlow > minFlow) waterToFlow /= flowDivider;
+                    //---Falling down---
+                    if(currentCell > 0 && bottomCell != -1 && bottomCell != solidBlockID){
+                        float waterToFlow = waterFlowDown(currentCell, bottomCell) / flowDivider;
 
-                    matrix[y][x] -= waterToFlow;
-                    matrix[y + 1][x] += waterToFlow;
+                        //Instead of instant transfering water
+                        //we do it partialy to create smooth transition
+                        if(waterToFlow > minFlow) waterToFlow /= flowDivider;
+
+                        newMatrix[y][x] -= waterToFlow;
+                        newMatrix[y + 1][x] += waterToFlow;
+
+                        continue;
+                    }
+
+                    //---Spilling to left---
+                    if(currentCell > 0 && leftCell != -1 && leftCell != solidBlockID){
+                        if(leftCell < currentCell){
+                            // float waterToFlow = ((leftCell + currentCell) / 2.f) - leftCell;
+
+                            // //Instead of instant transfering water
+                            // //we do it partialy to create smooth transition
+                            // if(waterToFlow > minFlow) waterToFlow /= flowDivider;
+
+                            // newMatrix[y][x] -= waterToFlow;
+                            // newMatrix[y][x - 1] += waterToFlow;
+
+                            float waterToFlow = (matrix[y][x] - matrix[y][x-1]) / 4.f;
+                            if(waterToFlow > minFlow) waterToFlow /= flowDivider;
+                            //Flow = constrain(Flow, 0, remaining_mass);
+                            
+                            newMatrix[y][x] -= waterToFlow;
+                            newMatrix[y][x - 1] += waterToFlow;
+                            //remaining_mass -= Flow;
+                        }
+                    }
+                    //------
+
+                    //---Spilling to right---
+                    if(currentCell > 0 && rightCell != -1 && rightCell != solidBlockID){
+                        if(rightCell < currentCell){
+                            // float waterToFlow = ((rightCell + currentCell) / 2.f) - rightCell;
+
+                            // //Instead of instant transfering water
+                            // //we do it partialy to create smooth transition
+                            // if(waterToFlow > minFlow) waterToFlow /= flowDivider;
+
+                            // newMatrix[y][x] -= waterToFlow;
+                            // newMatrix[y][x + 1] += waterToFlow;
+
+                            float waterToFlow = (matrix[y][x] - matrix[y][x + 1]) / 4.f;
+                            if(waterToFlow > minFlow) waterToFlow /= flowDivider;
+                            //Flow = constrain(Flow, 0, remaining_mass);
+                            
+                            newMatrix[y][x] -= waterToFlow;
+                            newMatrix[y][x + 1] += waterToFlow;
+                        }
+                    }
+                    //------
                 }
             }
+
+            matrix = newMatrix;
             //------
 
             //---Rendering matrix---
             for(int y = 0; y < matrixSize.y; y++){
                 for(int x = 0; x < matrixSize.x; x++){
-                    switch(int(matrix[y][x])){
+                    int value = round(matrix[y][x]);
+
+                    switch(value){
                         case 0:
                             break;
 
