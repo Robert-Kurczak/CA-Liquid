@@ -1,42 +1,52 @@
 #define OLC_PGE_APPLICATION
 #include "olcPixelGameEngine.h"
+#include "HUD.h"
+
 #include "cstdlib"
 #include "iostream"
 #include <math.h>
 
 #define solidBlockID 999
 
-// class Cell{
-
-//     public:
-//         float waterValue, velocity;
-//         Cell(float waterValue, float velocity) : waterValue(waterValue), velocity(velocity){}
-// };
-
 class LiquidSimulator : public olc::PixelGameEngine{
     private:
+        //---User input section---
+        float panelWidthPercent = 25;
+        //------
+
+        //---Need to be initialized in OnUserCreate()---
+        olc::vi2d panelSize;
+        olc::vi2d simulationSize;
+        olc::vi2d matrixSize;
+        //------
+
+        std::vector<std::vector<float>> matrix;
+
+        //---Graphic---
         std::unique_ptr<olc::Sprite> spriteSheet;
         olc::vi2d tileSize = {4, 4};
+        //------
 
+        //---Parameters---
         char maxWaterValue = 4;
         float compression = 0.1;
 
         //If divider would have value of 1, no states inbetween
         //of water flowing from cell to cell would be rendered
-        float flowDivider = 2;
+        float flowDivider = 1;
 
         //We have to stop dividing at some point
         float minFlow = 0.5;
+        //------
 
-        std::vector<std::vector<float>> matrix;
-
-        //Need to be initialized in OnUserCreate()
-        olc::vi2d matrixSize;
-
+        //---For updating on fixed intervals---
         double clock = 0;
-        double updateInterval = 0.02;
+        double updateInterval = 0;
+        //------
 
-        int getNeighbour(olc::vi2d currentPosition, olc::vi2d versor){
+        //Returns neighour of currentPosition, defined by versor
+        //Returns -1 if out of range
+        float getNeighbour(olc::vi2d currentPosition, olc::vi2d versor){
             int positionX = currentPosition.x + versor.x;
             int positionY = currentPosition.y + versor.y;
 
@@ -48,6 +58,7 @@ class LiquidSimulator : public olc::PixelGameEngine{
             }
         }
 
+        //Returns amount of water that should flow from source to sink
         float waterFlowDown(float source, float sink){
             float sum = source + sink;
 
@@ -67,7 +78,11 @@ class LiquidSimulator : public olc::PixelGameEngine{
 
     public:
         bool OnUserCreate() override{
-            matrixSize = {ScreenWidth() / tileSize.x, ScreenHeight() / tileSize.y};
+            //---Calculate sizes---
+            panelSize = {int((float)ScreenWidth() * (panelWidthPercent / 100.f)), ScreenHeight()};
+            simulationSize = olc::vi2d(ScreenWidth() - panelSize.x, ScreenHeight());
+            matrixSize = simulationSize / tileSize;
+            //------
 
             //Load sprite sheet
             spriteSheet = std::make_unique<olc::Sprite>("./Sprites/tiles.png");
@@ -85,46 +100,50 @@ class LiquidSimulator : public olc::PixelGameEngine{
             }
             //------
 
-            //matrix[8][4] = 5;
-            matrix[18][15] = 4;
+            matrix[79][79] = solidBlockID;
+            matrix[78][79] = solidBlockID;
+            matrix[80][80] = solidBlockID;
+            matrix[81][80] = solidBlockID;
+            matrix[82][80] = solidBlockID;
+            matrix[83][80] = solidBlockID;
+            matrix[84][80] = solidBlockID;
+            matrix[85][80] = solidBlockID;
+            matrix[86][80] = solidBlockID;
+            matrix[87][80] = solidBlockID;
+            matrix[88][80] = solidBlockID;
 
             return true;
         }
 
         bool OnUserUpdate(float fElapsedTime) override{
             //---Spawn water cell on Enter---
-            if(GetKey(olc::Key::ENTER).bPressed){
-                matrix[15][15] = 4;
-            }//------
+            if(GetKey(olc::Key::ENTER).bHeld){
+                matrix[30][100] = 4;
+            }
+            //------
 
             //---Executing simulation every update interval---
             clock += fElapsedTime;
 
-            if(clock < updateInterval){
-                return true;
-            }
-            else{
-                clock -= updateInterval;
-            }
+            if(clock < updateInterval) return true;
+            else clock = 0;
             //------
 
             Clear(olc::BLACK);
 
             //---Simulation step---
-            std::vector<std::vector<float>> newMatrix = matrix;
             for(int y = 0; y < matrixSize.y; y++){
                 for(int x = 0; x < matrixSize.x; x++){
-                    float &currentCell = newMatrix[y][x];
+                    float &currentCell = matrix[y][x];
 
-                    //---Debug---//
-                    //float xRow[25] = 
-                    //------
-
+                    //Skipping block that are not water
                     if(currentCell == -1 || currentCell == solidBlockID) continue;
 
+                    //---Values of current cell neighbours---
                     float bottomCell = getNeighbour(olc::vi2d(x, y), olc::vi2d(0, 1));
                     float leftCell = getNeighbour(olc::vi2d(x, y), olc::vi2d(-1, 0));
                     float rightCell = getNeighbour(olc::vi2d(x, y), olc::vi2d(1, 0));
+                    //------
 
                     //---Falling down---
                     if(currentCell > 0 && bottomCell != -1 && bottomCell != solidBlockID){
@@ -134,31 +153,21 @@ class LiquidSimulator : public olc::PixelGameEngine{
                         //we do it partialy to create smooth transition
                         if(waterToFlow > minFlow) waterToFlow /= flowDivider;
 
-                        newMatrix[y][x] -= waterToFlow;
-                        newMatrix[y + 1][x] += waterToFlow;
-
-                        continue;
+                        matrix[y][x] -= waterToFlow;
+                        matrix[y + 1][x] += waterToFlow;
                     }
 
                     //---Spilling to left---
                     if(currentCell > 0 && leftCell != -1 && leftCell != solidBlockID){
                         if(leftCell < currentCell){
-                            // float waterToFlow = ((leftCell + currentCell) / 2.f) - leftCell;
+                            float waterToFlow = (currentCell - leftCell) / 4.f;
 
-                            // //Instead of instant transfering water
-                            // //we do it partialy to create smooth transition
-                            // if(waterToFlow > minFlow) waterToFlow /= flowDivider;
-
-                            // newMatrix[y][x] -= waterToFlow;
-                            // newMatrix[y][x - 1] += waterToFlow;
-
-                            float waterToFlow = (matrix[y][x] - matrix[y][x-1]) / 4.f;
+                            //Instead of instant transfering water
+                            //we do it partialy to create smooth transition
                             if(waterToFlow > minFlow) waterToFlow /= flowDivider;
-                            //Flow = constrain(Flow, 0, remaining_mass);
                             
-                            newMatrix[y][x] -= waterToFlow;
-                            newMatrix[y][x - 1] += waterToFlow;
-                            //remaining_mass -= Flow;
+                            matrix[y][x] -= waterToFlow;
+                            matrix[y][x - 1] += waterToFlow;
                         }
                     }
                     //------
@@ -166,28 +175,17 @@ class LiquidSimulator : public olc::PixelGameEngine{
                     //---Spilling to right---
                     if(currentCell > 0 && rightCell != -1 && rightCell != solidBlockID){
                         if(rightCell < currentCell){
-                            // float waterToFlow = ((rightCell + currentCell) / 2.f) - rightCell;
 
-                            // //Instead of instant transfering water
-                            // //we do it partialy to create smooth transition
-                            // if(waterToFlow > minFlow) waterToFlow /= flowDivider;
-
-                            // newMatrix[y][x] -= waterToFlow;
-                            // newMatrix[y][x + 1] += waterToFlow;
-
-                            float waterToFlow = (matrix[y][x] - matrix[y][x + 1]) / 4.f;
+                            float waterToFlow = (currentCell - rightCell) / 4.f;
                             if(waterToFlow > minFlow) waterToFlow /= flowDivider;
-                            //Flow = constrain(Flow, 0, remaining_mass);
                             
-                            newMatrix[y][x] -= waterToFlow;
-                            newMatrix[y][x + 1] += waterToFlow;
+                            matrix[y][x] -= waterToFlow;
+                            matrix[y][x + 1] += waterToFlow;
                         }
                     }
                     //------
                 }
             }
-
-            matrix = newMatrix;
             //------
 
             //---Rendering matrix---
@@ -229,6 +227,10 @@ class LiquidSimulator : public olc::PixelGameEngine{
             }
             //------
 
+            //---Draw panel---
+            DrawString({simulationSize.x + 5, 5}, "Compression: " + std::to_string(compression));
+            DrawString({simulationSize.x + 5, 20}, "Flow divider: " + std::to_string(flowDivider));
+            //------
             return true;
         }
 
@@ -236,10 +238,10 @@ class LiquidSimulator : public olc::PixelGameEngine{
 
 int main(){
 
-    //---Creating window and start simulation---
+    //---Creating window and starting simulation---
     LiquidSimulator LS;
 
-    if(LS.Construct(100, 100, 5, 5)){
+    if(LS.Construct(640, 360, 2, 2)){
 		LS.Start();
     }
     //------
