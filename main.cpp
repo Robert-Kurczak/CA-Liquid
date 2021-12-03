@@ -6,12 +6,16 @@
 #include "iostream"
 #include <math.h>
 
+#include <sstream>
+#include <iomanip>
+
 #define solidBlockID 999
 
 class LiquidSimulator : public olc::PixelGameEngine{
     private:
         //---User input section---
-        float panelWidthPercent = 25;
+        float panelWidthPercent = 35;
+        const olc::Pixel panelColors[2] = {olc::WHITE, olc::BLUE};
         //------
 
         //---Need to be initialized in OnUserCreate()---
@@ -19,8 +23,14 @@ class LiquidSimulator : public olc::PixelGameEngine{
         olc::vi2d simulationSize;
         olc::vi2d matrixSize;
         //------
+        struct cell{
+            float value;
+            bool isFalling;
 
-        std::vector<std::vector<float>> matrix;
+            cell(float value, bool isFalling) : value(value), isFalling(isFalling){}
+        };
+
+        std::vector<std::vector<cell>> matrix;
 
         //---Graphic---
         std::unique_ptr<olc::Sprite> spriteSheet;
@@ -28,21 +38,83 @@ class LiquidSimulator : public olc::PixelGameEngine{
         //------
 
         //---Parameters---
-        char maxWaterValue = 4;
         float compression = 0.1;
 
         //If divider would have value of 1, no states inbetween
-        //of water flowing from cell to cell would be rendered
+        //water flowing from cell to cell would be rendered
         float flowDivider = 1;
 
         //We have to stop dividing at some point
         float minFlow = 0.5;
+
+        float stepsPerFrame = 1;
+
+        char maxWaterValue = 4;
         //------
 
         //---For updating on fixed intervals---
-        double clock = 0;
-        double updateInterval = 0;
+        float clock = 0;
+        float updateInterval = 0;
         //------
+
+        enum parametersTypes {par_float, par_int};
+
+        struct varParameter{
+            float& value;
+            parametersTypes type;
+            std::string label;
+            float step;
+            float minValue;
+            float maxValue;
+
+            varParameter(float& value, parametersTypes type, std::string label, float step, float minValue = -INFINITY, float maxValue = INFINITY)
+            : value(value), type(type), label(label), step(step), minValue(minValue), maxValue(maxValue){}
+
+            void increase(){
+                value += step;
+
+                if(value > maxValue){
+                    value = maxValue;
+                }
+            }
+
+            void decrease(){
+                value -= step;
+
+                if(value < minValue){
+                    value = minValue;
+                }
+            }
+        };
+
+        //---Panel variables---
+        varParameter parametersToChange[4] = {
+            varParameter(compression, par_float, "Compression: ", 0.001),
+            varParameter(flowDivider, par_float, "Flow divider: ", 0.001, 1),
+            varParameter(updateInterval, par_float, "Update interval: ", 0.0001, 0),
+            varParameter(stepsPerFrame, par_int, "Steps per frame: ", 1, 1)
+        };
+
+        char parametersAmount = 4;
+        char activeOption = 0;
+        //------
+
+        //matrixSizes have to be initialized before calling this method
+        void initializeMatrix(){
+            matrix.clear();
+
+            for(int y = 0; y < matrixSize.y; y++){
+                std::vector<cell> row;
+
+                for(int x = 0; x < matrixSize.x; x++){
+                    //Filling everything with 0, except borders
+                    float value = (y == 0 || x == 0 || y == matrixSize.y - 1 || x == matrixSize.x - 1) * solidBlockID;
+                    row.push_back(cell(value, false));
+                }
+
+                matrix.push_back(row);
+            }
+        }
 
         //Returns neighour of currentPosition, defined by versor
         //Returns -1 if out of range
@@ -50,8 +122,8 @@ class LiquidSimulator : public olc::PixelGameEngine{
             int positionX = currentPosition.x + versor.x;
             int positionY = currentPosition.y + versor.y;
 
-            if(positionX < matrixSize.x && positionY < matrixSize.y){
-                return matrix[positionY][positionX];
+            if(positionX < matrixSize.x && positionY < matrixSize.y && positionX >= 0 && positionY >= 0){
+                return matrix[positionY][positionX].value;
             }
             else{
                 return -1;
@@ -76,6 +148,88 @@ class LiquidSimulator : public olc::PixelGameEngine{
             }
         }
 
+        float waterFlowUp(float source, float sink){
+            return source - (waterFlowDown(source, sink) + sink);
+        }
+
+        std::string formatNumber(float value, char precision){
+            std::stringstream stream;
+
+            stream << std::fixed << std::setprecision(precision) << value;
+
+            return stream.str();
+        }
+
+        void drawPanel(){
+            for(int i = 0; i < parametersAmount; i++){
+                float number = parametersToChange[i].value;
+                char precision = 4;
+
+                if(parametersToChange[i].type == par_int){
+                    number = (int)number;
+                    precision = 0;
+                }
+                
+                std::string label = parametersToChange[i].label;
+
+                DrawString({simulationSize.x + 5, 15 * i + 5}, label + formatNumber(number, precision), panelColors[activeOption == i]);
+            }
+        }
+
+        void handleUserInput(){
+            //---Spawn water cell on Enter---
+            if(GetKey(olc::Key::R).bPressed){
+                initializeMatrix();
+            }
+            //------
+
+            //---Input panel options---
+            if(GetKey(olc::Key::DOWN).bPressed){
+                activeOption++;
+
+                if(activeOption == parametersAmount) activeOption = 0;
+            }
+
+            if(GetKey(olc::Key::UP).bPressed){
+                activeOption--;
+                
+                if(activeOption == -1) activeOption = parametersAmount - 1;
+            }
+
+            if(parametersToChange[activeOption].type == par_float){
+                if(GetKey(olc::Key::RIGHT).bHeld) parametersToChange[activeOption].increase();
+
+                if(GetKey(olc::Key::LEFT).bHeld) parametersToChange[activeOption].decrease();
+            }
+            else{
+                if(GetKey(olc::Key::RIGHT).bPressed) parametersToChange[activeOption].increase();
+
+                if(GetKey(olc::Key::LEFT).bPressed) parametersToChange[activeOption].decrease();
+            }
+            //------
+
+            //Left mouse click
+            if(GetMouse(0).bHeld){
+                olc::vi2d position = {GetMouseX(), GetMouseY()};
+
+                if(position.x <= simulationSize.x && position.y <= simulationSize.y){
+                    position /= tileSize;
+
+                    matrix[position.y][position.x] = cell(solidBlockID, false);
+                }
+            }
+
+            if(GetMouse(1).bHeld){
+                olc::vi2d position = {GetMouseX(), GetMouseY()};
+
+                if(position.x <= simulationSize.x && position.y <= simulationSize.y){
+                    position /= tileSize;
+
+                    matrix[position.y][position.x] = cell(maxWaterValue, false);
+                }
+            }
+        }
+
     public:
         bool OnUserCreate() override{
             //---Calculate sizes---
@@ -88,39 +242,26 @@ class LiquidSimulator : public olc::PixelGameEngine{
             spriteSheet = std::make_unique<olc::Sprite>("./Sprites/tiles.png");
 
             //---Initialization of cellular automaton matrix---
-            for(int y = 0; y < matrixSize.y; y++){
-                std::vector<float> row;
-
-                for(int x = 0; x < matrixSize.x; x++){
-                    //Filling everything with 0, except borders
-                    row.push_back((y == 0 || x == 0 || y == matrixSize.y - 1 || x == matrixSize.x - 1) * solidBlockID);
-                }
-
-                matrix.push_back(row);
-            }
+            initializeMatrix();
             //------
 
-            matrix[79][79] = solidBlockID;
-            matrix[78][79] = solidBlockID;
-            matrix[80][80] = solidBlockID;
-            matrix[81][80] = solidBlockID;
-            matrix[82][80] = solidBlockID;
-            matrix[83][80] = solidBlockID;
-            matrix[84][80] = solidBlockID;
-            matrix[85][80] = solidBlockID;
-            matrix[86][80] = solidBlockID;
-            matrix[87][80] = solidBlockID;
-            matrix[88][80] = solidBlockID;
+            matrix[79][79].value = solidBlockID;
+            matrix[78][79].value = solidBlockID;
+            matrix[80][80].value = solidBlockID;
+            matrix[81][80].value = solidBlockID;
+            matrix[82][80].value = solidBlockID;
+            matrix[83][80].value = solidBlockID;
+            matrix[84][80].value = solidBlockID;
+            matrix[85][80].value = solidBlockID;
+            matrix[86][80].value = solidBlockID;
+            matrix[87][80].value = solidBlockID;
+            matrix[88][80].value = solidBlockID;
 
             return true;
         }
 
         bool OnUserUpdate(float fElapsedTime) override{
-            //---Spawn water cell on Enter---
-            if(GetKey(olc::Key::ENTER).bHeld){
-                matrix[30][100] = 4;
-            }
-            //------
+            handleUserInput();
 
             //---Executing simulation every update interval---
             clock += fElapsedTime;
@@ -131,67 +272,96 @@ class LiquidSimulator : public olc::PixelGameEngine{
 
             Clear(olc::BLACK);
 
-            //---Simulation step---
-            for(int y = 0; y < matrixSize.y; y++){
-                for(int x = 0; x < matrixSize.x; x++){
-                    float &currentCell = matrix[y][x];
+            for(int i = 0; i < (int)stepsPerFrame; i++){
+                //---Simulation step---
+                for(int y = matrixSize.y - 1; y >= 0; y--){
+                    for(int x = matrixSize.x - 1; x >= 0; x--){
+                        float& currentCell = matrix[y][x].value;
+                        //matrix[y][x].isFalling = false;
 
-                    //Skipping block that are not water
-                    if(currentCell == -1 || currentCell == solidBlockID) continue;
+                        //Skipping blocks that are not water
+                        if(currentCell == -1 || currentCell == solidBlockID) continue;
 
-                    //---Values of current cell neighbours---
-                    float bottomCell = getNeighbour(olc::vi2d(x, y), olc::vi2d(0, 1));
-                    float leftCell = getNeighbour(olc::vi2d(x, y), olc::vi2d(-1, 0));
-                    float rightCell = getNeighbour(olc::vi2d(x, y), olc::vi2d(1, 0));
-                    //------
+                        //---Values of current cell neighbours---
+                        float upperCell = getNeighbour(olc::vi2d(x, y), olc::vi2d(0, -1));
+                        float bottomCell = getNeighbour(olc::vi2d(x, y), olc::vi2d(0, 1));
+                        float leftCell = getNeighbour(olc::vi2d(x, y), olc::vi2d(-1, 0));
+                        float rightCell = getNeighbour(olc::vi2d(x, y), olc::vi2d(1, 0));
+                        //------
 
-                    //---Falling down---
-                    if(currentCell > 0 && bottomCell != -1 && bottomCell != solidBlockID){
-                        float waterToFlow = waterFlowDown(currentCell, bottomCell) / flowDivider;
-
-                        //Instead of instant transfering water
-                        //we do it partialy to create smooth transition
-                        if(waterToFlow > minFlow) waterToFlow /= flowDivider;
-
-                        matrix[y][x] -= waterToFlow;
-                        matrix[y + 1][x] += waterToFlow;
-                    }
-
-                    //---Spilling to left---
-                    if(currentCell > 0 && leftCell != -1 && leftCell != solidBlockID){
-                        if(leftCell < currentCell){
-                            float waterToFlow = (currentCell - leftCell) / 4.f;
+                        //---Falling down---
+                        if(currentCell > 0 && bottomCell != -1 && bottomCell != solidBlockID){
+                            float waterToFlow = waterFlowDown(currentCell, bottomCell);
 
                             //Instead of instant transfering water
                             //we do it partialy to create smooth transition
                             if(waterToFlow > minFlow) waterToFlow /= flowDivider;
-                            
-                            matrix[y][x] -= waterToFlow;
-                            matrix[y][x - 1] += waterToFlow;
+
+                            matrix[y][x].value -= waterToFlow;
+                            matrix[y + 1][x].value += waterToFlow;
+
+
+                            if(waterToFlow > 0.1) matrix[y + 1][x].isFalling = true;
                         }
-                    }
-                    //------
 
-                    //---Spilling to right---
-                    if(currentCell > 0 && rightCell != -1 && rightCell != solidBlockID){
-                        if(rightCell < currentCell){
+                        //---Spilling to left---
+                        if(currentCell > 0 && leftCell != -1 && leftCell != solidBlockID){
+                            if(leftCell < currentCell){
 
-                            float waterToFlow = (currentCell - rightCell) / 4.f;
+                                float waterToFlow = (currentCell - leftCell) / 4.f;
+
+                                //Instead of instant transfering water
+                                //we do it partialy to create smooth transition
+                                if(waterToFlow > minFlow) waterToFlow /= flowDivider;
+
+                                matrix[y][x].value -= waterToFlow;
+                                matrix[y][x - 1].value += waterToFlow;
+                            }     
+                        }
+                        //------
+
+                        //---Spilling to right---
+                        if(currentCell > 0 && rightCell != -1 && rightCell != solidBlockID){
+                            if(rightCell < currentCell){
+
+                                float waterToFlow = (currentCell - rightCell) / 4.f;
+                                if(waterToFlow > minFlow) waterToFlow /= flowDivider;
+                                
+                                matrix[y][x].value -= waterToFlow;
+                                matrix[y][x + 1].value += waterToFlow;
+                            }
+                        }
+                        //------
+
+                        //---Going up---
+                        if(currentCell > 0 && upperCell != -1 && upperCell != solidBlockID){
+
+                            float waterToFlow = waterFlowUp(currentCell, upperCell);
+
+                            //Instead of instant transfering water
+                            //we do it partialy to create smooth transition
                             if(waterToFlow > minFlow) waterToFlow /= flowDivider;
-                            
-                            matrix[y][x] -= waterToFlow;
-                            matrix[y][x + 1] += waterToFlow;
+
+                            matrix[y][x].value -= waterToFlow;
+                            matrix[y - 1][x].value += waterToFlow;
                         }
+                        //------
                     }
-                    //------
                 }
+                //------
             }
-            //------
 
             //---Rendering matrix---
             for(int y = 0; y < matrixSize.y; y++){
                 for(int x = 0; x < matrixSize.x; x++){
-                    int value = round(matrix[y][x]);
+                    int value = round(matrix[y][x].value);
+
+                    if(matrix[y][x].isFalling){
+                        DrawPartialSprite(olc::vi2d(x, y) * tileSize, spriteSheet.get(), olc::vi2d(3, 0) * tileSize, tileSize);
+
+                        matrix[y][x].isFalling = false;
+                        continue;
+                    }
 
                     switch(value){
                         case 0:
@@ -228,8 +398,7 @@ class LiquidSimulator : public olc::PixelGameEngine{
             //------
 
             //---Draw panel---
-            DrawString({simulationSize.x + 5, 5}, "Compression: " + std::to_string(compression));
-            DrawString({simulationSize.x + 5, 20}, "Flow divider: " + std::to_string(flowDivider));
+            drawPanel();
             //------
             return true;
         }
@@ -237,7 +406,6 @@ class LiquidSimulator : public olc::PixelGameEngine{
 };
 
 int main(){
-
     //---Creating window and starting simulation---
     LiquidSimulator LS;
 
