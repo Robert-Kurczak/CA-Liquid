@@ -1,0 +1,8 @@
+{
+    "width": 640,
+    "height": 360,
+    "scale": 2,
+    "fullscreen": false,
+    "vsync": true,
+    "cohesion": false
+}
