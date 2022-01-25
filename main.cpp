@@ -336,6 +336,7 @@ class LiquidSimulator : public olc::PixelGameEngine{
             //Draw solid tile
             if(drawLines){
                 if(GetMouse(0).bPressed){
+                    //Setting first point
                     if(firstPosition == olc::vi2d(-1, -1)){
                         olc::vi2d position = {GetMouseX(), GetMouseY()};
 
@@ -456,6 +457,16 @@ class LiquidSimulator : public olc::PixelGameEngine{
             handleUserInput();
 
             Clear(olc::BLACK);
+
+            if(firstPosition != olc::vi2d(-1, -1)){
+                olc::vi2d pos1 = firstPosition * tileSize;
+
+                FillCircle(pos1, 6, olc::RED);
+
+                olc::vi2d pos2 = {GetMouseX(), GetMouseY()};
+                
+                DrawLineDecal(pos1, pos2, olc::RED);
+            }
 
             for(int i = 0; i < (int)stepsPerFrame; i++){
                 //---Simulation step---
