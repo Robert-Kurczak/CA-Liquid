@@ -1,6 +1,5 @@
 #define OLC_PGE_APPLICATION
 #include "olcPixelGameEngine.h"
-#include "HUD.h"
 
 #include "cstdlib"
 #include "iostream"
@@ -8,6 +7,11 @@
 
 #include <sstream>
 #include <iomanip>
+
+#include <fstream>
+#include "nlohmann/json.hpp"
+
+#include <algorithm>
 
 #define solidBlockID 999
 
@@ -22,7 +26,10 @@ class LiquidSimulator : public olc::PixelGameEngine{
         olc::vi2d panelSize;
         olc::vi2d simulationSize;
         olc::vi2d matrixSize;
+
+        float interfaceFactor;
         //------
+        
         struct cell{
             float value;
             bool isFalling;
@@ -30,37 +37,37 @@ class LiquidSimulator : public olc::PixelGameEngine{
             cell(float value, bool isFalling) : value(value), isFalling(isFalling){}
         };
 
+        //Main matrix used for calculation
         std::vector<std::vector<cell>> matrix;
 
         //---Graphic---
-        std::unique_ptr<olc::Sprite> spriteSheet;
+        std::unique_ptr<olc::Decal> decalSheet;
+
         olc::vi2d tileSize = {4, 4};
         //------
 
-        //---Parameters---
-        float compression = 0.1;
-
-        //If divider would have value of 1, no states inbetween
-        //water flowing from cell to cell would be rendered
-        float flowDivider = 1;
-
-        //We have to stop dividing at some point
         float minFlow = 0.5;
-
-        float stepsPerFrame = 1;
-
         char maxWaterValue = 4;
+        
+        //---Parameters---
+        float compression = 0.4;
+        float flowDivider = 1;
+        //We have to stop dividing at some point
+        float stepsPerFrame = 5;
+        float brushSize = 2;
+
+        //Float instead of bool so it can be compatible
+        //with parametersToChange array
+        //0 -> false
+        //1 -> true
+        float drawLines = 0;
         //------
 
-        //---For updating on fixed intervals---
-        float clock = 0;
-        float updateInterval = 0;
-        //------
-
-        enum parametersTypes {par_float, par_int};
+        enum parametersTypes {par_float, par_int, par_bool};
 
         struct varParameter{
             float& value;
+            const float defaultValue;
             parametersTypes type;
             std::string label;
             float step;
@@ -68,7 +75,8 @@ class LiquidSimulator : public olc::PixelGameEngine{
             float maxValue;
 
             varParameter(float& value, parametersTypes type, std::string label, float step, float minValue = -INFINITY, float maxValue = INFINITY)
-            : value(value), type(type), label(label), step(step), minValue(minValue), maxValue(maxValue){}
+            : value(value), type(type), label(label), step(step), minValue(minValue), maxValue(maxValue), defaultValue(value){
+            }
 
             void increase(){
                 value += step;
@@ -85,17 +93,23 @@ class LiquidSimulator : public olc::PixelGameEngine{
                     value = minValue;
                 }
             }
+
+            void resetValue(){
+                value = defaultValue;
+            }
         };
 
         //---Panel variables---
-        varParameter parametersToChange[4] = {
+        varParameter parametersToChange[5] = {
             varParameter(compression, par_float, "Compression: ", 0.001),
             varParameter(flowDivider, par_float, "Flow divider: ", 0.001, 1),
-            varParameter(updateInterval, par_float, "Update interval: ", 0.0001, 0),
-            varParameter(stepsPerFrame, par_int, "Steps per frame: ", 1, 1)
+            varParameter(stepsPerFrame, par_int, "Steps per frame: ", 1, 1),
+            varParameter(brushSize, par_int, "Brush size: ", 1),
+            varParameter(drawLines, par_bool, "Draw lines: ", 1, 0, 1)
         };
 
-        char parametersAmount = 4;
+        char parametersAmount = 5;
+        char graphicParameters = 2;
         char activeOption = 0;
         //------
 
@@ -107,9 +121,8 @@ class LiquidSimulator : public olc::PixelGameEngine{
                 std::vector<cell> row;
 
                 for(int x = 0; x < matrixSize.x; x++){
-                    //Filling everything with 0, except borders
-                    float value = (y == 0 || x == 0 || y == matrixSize.y - 1 || x == matrixSize.x - 1) * solidBlockID;
-                    row.push_back(cell(value, false));
+                    //Filling everything with 0
+                    row.push_back(cell(0, false));
                 }
 
                 matrix.push_back(row);
@@ -152,16 +165,114 @@ class LiquidSimulator : public olc::PixelGameEngine{
             return source - (waterFlowDown(source, sink) + sink);
         }
 
-        std::string formatNumber(float value, char precision){
+        //Transform given parameter number value to string to be rendered
+        std::string formatNumber(varParameter parameter){
             std::stringstream stream;
 
-            stream << std::fixed << std::setprecision(precision) << value;
+            if(parameter.type == par_float){
+                stream << std::fixed << std::setprecision(4) << parameter.value;
+            }
+            else if(parameter.type == par_int){
+                stream << (int)parameter.value;
+            }
+            else if(parameter.type == par_bool){
+                std::string label[2] = {"Off", "On"};
+
+                stream << label[(int)parameter.value];
+            }
 
             return stream.str();
         }
 
+        //Struct that calculates and stores fixed position of interface text (like headers and labels)
+        //based on given margin from the left side of window,
+        //header margin from top side of window,
+        //label margin - margin between labels
+        struct interfacePositions{
+            olc::vf2d firstHeader;
+            olc::vf2d secondHeader;
+            std::vector<olc::vf2d> labels;
+
+            interfacePositions(){}
+
+            interfacePositions(float leftMargin, float headerTopMargin, float labelMargin, int firstSectionlabelsAmount, int secondSectionlabelsAmount){
+                firstHeader = {leftMargin, headerTopMargin};
+
+                for(int i = 0; i < firstSectionlabelsAmount; i++){
+                    float positionY = headerTopMargin * 2 + i * labelMargin;
+                    labels.push_back({leftMargin, positionY});
+                }
+
+                float firstSectionHeight = headerTopMargin * 2 + firstSectionlabelsAmount * labelMargin - labelMargin;
+
+                secondHeader = {leftMargin, firstSectionHeight + headerTopMargin};
+
+                for(int i = 0; i < secondSectionlabelsAmount; i++){
+                    float positionY = headerTopMargin * 2 + i * labelMargin + firstSectionHeight;
+                    labels.push_back({leftMargin, positionY});
+                }
+            }
+        };
+
+        interfacePositions panelPositions;
+
+        void drawMatrixLine(olc::vi2d startPosition, olc::vi2d endPosition){
+            int dx =  abs(endPosition.x - startPosition.x);
+            int sx = startPosition.x < endPosition.x ? 1 : -1;
+
+            int dy = -abs(endPosition.y - startPosition.y);
+            int sy = startPosition.y < endPosition.y ? 1 : -1;
+
+            int err = dx + dy;
+            int e2;
+            
+
+            while(1){
+                //Very unefficient way of drawing line with specific thickness
+                //But it's easy and it works
+                int left = startPosition.x - (brushSize / 2);
+                int up = startPosition.y - (brushSize / 2);
+
+                for(int i = left; i <= left + brushSize; i++){
+                    for(int j = up; j <= up + brushSize; j++){
+                        if(getNeighbour({i, j}, {0, 0}) != -1){
+                            matrix[j][i].value = solidBlockID;
+                        }
+                    }
+                }
+                //------
+
+                if(startPosition.x == endPosition.x && startPosition.y == endPosition.y) break;
+
+                e2 = 2 * err;
+
+                if(e2 >= dy){
+                    err += dy;
+                    startPosition.x += sx;
+                }
+
+                if(e2 <= dx){
+                    err += dx;
+                    startPosition.y += sy;
+                }
+            }
+        }
+
         void drawPanel(){
-            for(int i = 0; i < parametersAmount; i++){
+            //---Simulation parameters---
+            DrawStringDecal(panelPositions.firstHeader, "--Simulation parameters--", olc::WHITE, {interfaceFactor, interfaceFactor});
+
+            for(int i = 0; i < parametersAmount - graphicParameters; i++){                
+                std::string label = parametersToChange[i].label;
+
+                DrawStringDecal(panelPositions.labels[i], label + formatNumber(parametersToChange[i]), panelColors[activeOption == i], {interfaceFactor, interfaceFactor});
+            }
+            //------
+
+            DrawStringDecal(panelPositions.secondHeader, "--Graphic parameters--", olc::WHITE, {interfaceFactor, interfaceFactor});
+            
+            //---Graphic parameters---
+            for(int i = parametersAmount - graphicParameters; i < parametersAmount; i++){
                 float number = parametersToChange[i].value;
                 char precision = 4;
 
@@ -172,30 +283,43 @@ class LiquidSimulator : public olc::PixelGameEngine{
                 
                 std::string label = parametersToChange[i].label;
 
-                DrawString({simulationSize.x + 5, 15 * i + 5}, label + formatNumber(number, precision), panelColors[activeOption == i]);
+                DrawStringDecal(panelPositions.labels[i], label + formatNumber(parametersToChange[i]), panelColors[activeOption == i], {interfaceFactor, interfaceFactor});
             }
+            //------
         }
 
+        olc::vi2d firstPosition = {-1, -1};
         void handleUserInput(){
-            //---Spawn water cell on Enter---
+            //---Reset matrix on R press---
             if(GetKey(olc::Key::R).bPressed){
                 initializeMatrix();
             }
             //------
 
+            //---Reset parameters on P press---
+            if(GetKey(olc::Key::P).bPressed){
+                for(int i = 0; i < parametersAmount; i++){
+                    parametersToChange[i].resetValue();
+                }
+            }
+            //------
+
             //---Input panel options---
+            //Switch parameter -> Down
             if(GetKey(olc::Key::DOWN).bPressed){
                 activeOption++;
 
                 if(activeOption == parametersAmount) activeOption = 0;
             }
 
+            //Switch parameter -> Up
             if(GetKey(olc::Key::UP).bPressed){
                 activeOption--;
                 
                 if(activeOption == -1) activeOption = parametersAmount - 1;
             }
 
+            //Changing parameter value
             if(parametersToChange[activeOption].type == par_float){
                 if(GetKey(olc::Key::RIGHT).bHeld) parametersToChange[activeOption].increase();
 
@@ -208,26 +332,96 @@ class LiquidSimulator : public olc::PixelGameEngine{
             }
             //------
 
-            //Left mouse click
-            if(GetMouse(0).bHeld){
-                olc::vi2d position = {GetMouseX(), GetMouseY()};
+            //---Drawing tiles---
+            //Draw solid tile
+            if(drawLines){
+                if(GetMouse(0).bPressed){
+                    //Setting first point
+                    if(firstPosition == olc::vi2d(-1, -1)){
+                        olc::vi2d position = {GetMouseX(), GetMouseY()};
 
-                if(position.x <= simulationSize.x && position.y <= simulationSize.y){
-                    position /= tileSize;
+                        if(position.x <= simulationSize.x && position.y <= simulationSize.y){
+                            firstPosition = position / tileSize;
+                        }
+                    }
+                    else{
+                        olc::vi2d position = {GetMouseX(), GetMouseY()};
 
-                    matrix[position.y][position.x] = cell(solidBlockID, false);
+                        if(position.x <= simulationSize.x && position.y <= simulationSize.y){
+                            position /= tileSize;
+
+                            drawMatrixLine(firstPosition, position);
+
+                            firstPosition = {-1, -1};
+                        }  
+                    }
+                }
+            }
+            else{
+                if(GetMouse(0).bHeld){
+                    olc::vi2d position = {GetMouseX(), GetMouseY()};
+                    if(position.x <= simulationSize.x && position.y <= simulationSize.y){
+                        position /= tileSize;
+
+                        int left = position.x - (brushSize / 2);
+                        int up = position.y - (brushSize / 2);
+
+                        for(int i = left; i <= left + brushSize; i++){
+                            for(int j = up; j <= up + brushSize; j++){
+                                if(getNeighbour({i, j}, {0, 0}) != -1){
+                                    matrix[j][i].value = solidBlockID;
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
+            //Draw water tile
             if(GetMouse(1).bHeld){
                 olc::vi2d position = {GetMouseX(), GetMouseY()};
+                if(position.x <= simulationSize.x && position.y <= simulationSize.y){
 
+                    position /= tileSize;
+
+                    int left = position.x - (brushSize / 2);
+                    int up = position.y - (brushSize / 2);
+
+                    for(int i = left; i <= left + brushSize; i++){
+                        for(int j = up; j <= up + brushSize; j++){
+                            if(getNeighbour({i, j}, {0, 0}) != -1){
+
+                                if(matrix[j][i].value != solidBlockID){
+                                    matrix[j][i].value += maxWaterValue;
+                                }
+                                else{
+                                    matrix[j][i].value = maxWaterValue;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        
+            //Remove tile
+            if(GetMouse(2).bHeld){
+                olc::vi2d position = {GetMouseX(), GetMouseY()};
                 if(position.x <= simulationSize.x && position.y <= simulationSize.y){
                     position /= tileSize;
 
-                    matrix[position.y][position.x] = cell(maxWaterValue, false);
+                    int left = position.x - (brushSize / 2);
+                    int up = position.y - (brushSize / 2);
+
+                    for(int i = left; i <= left + brushSize; i++){
+                        for(int j = up; j <= up + brushSize; j++){
+                            if(getNeighbour({i, j}, {0, 0}) != -1){
+                                matrix[j][i].value = 0;
+                            }
+                        }
+                    }
                 }
             }
+            //------
         }
 
     public:
@@ -236,26 +430,25 @@ class LiquidSimulator : public olc::PixelGameEngine{
             panelSize = {int((float)ScreenWidth() * (panelWidthPercent / 100.f)), ScreenHeight()};
             simulationSize = olc::vi2d(ScreenWidth() - panelSize.x, ScreenHeight());
             matrixSize = simulationSize / tileSize;
+
+            interfaceFactor = ScreenHeight() / 360;
+
+            panelPositions = interfacePositions(
+                    (5 + simulationSize.x),
+                    25 * interfaceFactor,
+                    15 * interfaceFactor,
+                    parametersAmount - graphicParameters,
+                    graphicParameters
+                );
             //------
 
             //Load sprite sheet
-            spriteSheet = std::make_unique<olc::Sprite>("./Sprites/tiles.png");
+            std::unique_ptr<olc::Sprite> spriteSheet = std::make_unique<olc::Sprite>("./Sprites/tiles.png");
+            decalSheet = std::make_unique<olc::Decal>(spriteSheet.get());
 
             //---Initialization of cellular automaton matrix---
             initializeMatrix();
             //------
-
-            matrix[79][79].value = solidBlockID;
-            matrix[78][79].value = solidBlockID;
-            matrix[80][80].value = solidBlockID;
-            matrix[81][80].value = solidBlockID;
-            matrix[82][80].value = solidBlockID;
-            matrix[83][80].value = solidBlockID;
-            matrix[84][80].value = solidBlockID;
-            matrix[85][80].value = solidBlockID;
-            matrix[86][80].value = solidBlockID;
-            matrix[87][80].value = solidBlockID;
-            matrix[88][80].value = solidBlockID;
 
             return true;
         }
@@ -263,14 +456,17 @@ class LiquidSimulator : public olc::PixelGameEngine{
         bool OnUserUpdate(float fElapsedTime) override{
             handleUserInput();
 
-            //---Executing simulation every update interval---
-            clock += fElapsedTime;
-
-            if(clock < updateInterval) return true;
-            else clock = 0;
-            //------
-
             Clear(olc::BLACK);
+
+            if(firstPosition != olc::vi2d(-1, -1)){
+                olc::vi2d pos1 = firstPosition * tileSize;
+
+                FillCircle(pos1, 6, olc::RED);
+
+                olc::vi2d pos2 = {GetMouseX(), GetMouseY()};
+                
+                DrawLineDecal(pos1, pos2, olc::RED);
+            }
 
             for(int i = 0; i < (int)stepsPerFrame; i++){
                 //---Simulation step---
@@ -356,40 +552,59 @@ class LiquidSimulator : public olc::PixelGameEngine{
                 for(int x = 0; x < matrixSize.x; x++){
                     int value = round(matrix[y][x].value);
 
+                    if(value == solidBlockID){
+                        DrawPartialDecal(olc::vi2d(x, y) * tileSize, decalSheet.get(), olc::vi2d(4, 0) * tileSize, tileSize);
+
+                        continue;
+                    }
+
+                    float compression = matrix[y][x].value - (float)maxWaterValue;
+                    int tint = 255;
+
+                    //Interpolate compression to value between 255 (no change) and 64 (dark)
+                    if(value != solidBlockID && compression > 0){
+                        tint = -191.f/(float)(2 * maxWaterValue) * compression + 255.f;
+
+                        if(tint < 64) tint = 64;
+                    }
+
+                    //---Rendering falling liquid as full tile---
                     if(matrix[y][x].isFalling){
-                        DrawPartialSprite(olc::vi2d(x, y) * tileSize, spriteSheet.get(), olc::vi2d(3, 0) * tileSize, tileSize);
+                        DrawPartialDecal(olc::vi2d(x, y) * tileSize, decalSheet.get(), olc::vi2d(3, 0) * tileSize, tileSize, {(1.f), (1.f)}, olc::Pixel(tint, tint, tint, 200));
 
                         matrix[y][x].isFalling = false;
                         continue;
                     }
+                    //------
 
                     switch(value){
                         case 0:
                             break;
 
                         case 1:
-                            DrawPartialSprite(olc::vi2d(x, y) * tileSize, spriteSheet.get(), olc::vi2d(0, 0) * tileSize, tileSize);
+                            // DrawPartialSprite(olc::vi2d(x, y) * tileSize, spriteSheet.get(), olc::vi2d(0, 0) * tileSize, tileSize);
 
+                            DrawPartialDecal(olc::vi2d(x, y) * tileSize, decalSheet.get(), olc::vi2d(0, 0) * tileSize, tileSize, {(1.f), (1.f)}, olc::Pixel(tint, tint, tint));
                             break;
 
                         case 2:
-                            DrawPartialSprite(olc::vi2d(x, y) * tileSize, spriteSheet.get(), olc::vi2d(1, 0) * tileSize, tileSize);
+                            // DrawPartialSprite(olc::vi2d(x, y) * tileSize, spriteSheet.get(), olc::vi2d(1, 0) * tileSize, tileSize);
+
+                            DrawPartialDecal(olc::vi2d(x, y) * tileSize, decalSheet.get(), olc::vi2d(1, 0) * tileSize, tileSize, {(1.f), (1.f)}, olc::Pixel(tint, tint, tint));
 
                             break;
 
                         case 3:
-                            DrawPartialSprite(olc::vi2d(x, y) * tileSize, spriteSheet.get(), olc::vi2d(2, 0) * tileSize, tileSize);
+                            // DrawPartialSprite(olc::vi2d(x, y) * tileSize, spriteSheet.get(), olc::vi2d(2, 0) * tileSize, tileSize);
+                            
+                            DrawPartialDecal(olc::vi2d(x, y) * tileSize, decalSheet.get(), olc::vi2d(2, 0) * tileSize, tileSize, {(1.f), (1.f)}, olc::Pixel(tint, tint, tint));
 
                             break;
 
                         default:
-                            DrawPartialSprite(olc::vi2d(x, y) * tileSize, spriteSheet.get(), olc::vi2d(3, 0) * tileSize, tileSize);
-
-                            break;
-                        
-                        //Rework this to enum or something
-                        case solidBlockID:
-                            DrawPartialSprite(olc::vi2d(x, y) * tileSize, spriteSheet.get(), olc::vi2d(4, 0) * tileSize, tileSize);
+                            // DrawPartialSprite(olc::vi2d(x, y) * tileSize, spriteSheet.get(), olc::vi2d(3, 0) * tileSize, tileSize);
+                            
+                            DrawPartialDecal(olc::vi2d(x, y) * tileSize, decalSheet.get(), olc::vi2d(3, 0) * tileSize, tileSize, {(1.f), (1.f)}, olc::Pixel(tint, tint, tint));
 
                             break;
                     }
@@ -405,11 +620,32 @@ class LiquidSimulator : public olc::PixelGameEngine{
 
 };
 
+//Use dedicated GPU
+extern "C"{
+  __declspec(dllexport) unsigned long NvOptimusEnablement = 0x00000001;
+}
+
 int main(){
+    //---Reading user setting from file---
+    std::ifstream jsonFile("config.json");
+    nlohmann::json configJson;
+
+    jsonFile >> configJson;
+    //------
+
     //---Creating window and starting simulation---
     LiquidSimulator LS;
 
-    if(LS.Construct(640, 360, 2, 2)){
+    if(LS.Construct(
+            configJson["width"],
+            configJson["height"],
+            configJson["scale"],
+            configJson["scale"],
+            configJson["fullscreen"],
+            configJson["vsync"],
+            configJson["cohesion"]
+        )
+    ){
 		LS.Start();
     }
     //------
