@@ -1,5 +1,5 @@
 # CA-Liquid
-Rather simple liquid simulator using cellular automaton model, rendered using PixelGameEngine.
+Rather simple liquid simulator using cellular automaton model. Everything is rendered using PixelGameEngine.
 This project helped me improve in writing C++ code and develop more understanding in cellular automata algorithms.
 
 ## Table of Contents
