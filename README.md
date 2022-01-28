@@ -11,6 +11,7 @@ This project helped me improve in writing C++ code and develop more understandin
 ## General info
 Project consist of one .exe file that displays interactive window. Within the window user can create water and solid blocks that properly interact with each other,
 creating fluid simulation. Window can be adjusted using option in config.json file so, no recompiling is needed after every change. Water blocks are actually decals,
+type of sprite that lives in GPU memory and is fully controlled by GPU. That means no CPU power is needed to render visuals aspects. Therefore CPU can be fully focused on calculations.
 
 ## Technologies
  1. C++17
