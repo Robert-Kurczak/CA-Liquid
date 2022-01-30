@@ -59,7 +59,10 @@ blocks. For example, when a parameter is 2, blocks of water added with single cl
  
  ## Setup
   ### Compiled file
-   After configuration proper settings in config.json file just open Simulator.exe
+  After configuration proper settings in config.json file just open Simulator.exe
+   
+  ### Compiling
+  If you want to build file yourself, use: g++ .\main.cpp -luser32 -lgdi32 -lopengl32 -lgdiplus -lShlwapi -ldwmapi -lstdc++fs -static -std=c++17
    
 ## Sources
 1. [Overall cellular automaton model idea for such simulations](https://w-shadow.com/blog/2009/09/01/simple-fluid-simulation)
