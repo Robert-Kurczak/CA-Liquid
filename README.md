@@ -27,7 +27,7 @@ R - Resets the area to its original state
 P - Resets parameters to their original values
 <br />
 <br />
-↑ - Przełącza aktualnie wybrany parametr o jedną pozycję wyżej
+↑ - Switches the currently selected parameter one position higher 
 
 ↓ - Switches the currently selected parameter one position lower 
 
